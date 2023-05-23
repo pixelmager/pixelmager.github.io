@@ -257,6 +257,15 @@ I also wouldn't be able to look the rest of [the Blue Noise Brigade](https://twi
 | [![white vs blue](white_vs_blue.png)](white_vs_blue.png) |
 | <center><i>notice how the noise at the bottom looks much smoother due to less "clumping"<br><a href="https://www.shadertoy.com/view/NdSyzz">shadertoy</a></i></center> |
 
+Quick note that you should then pipe the noise through this function to get the best results
+```hlsl
+float remap_pdf_tri_unity( float v ) {
+    v = v*2.0-1.0;
+    v = sign(v) * (1.0 - sqrt(1.0 - abs(v)));
+
+    return v; //note: [-1;1[
+}
+```
 
 # References
 
