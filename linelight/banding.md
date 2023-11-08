@@ -65,6 +65,7 @@ fixed4 SpriteFrag(v2f IN) : SV_Target
     return fixed4( c );
 }
 ```
+(see the end of this article for a version that is a bit easier to reuse)
 
 <br>
 
@@ -257,15 +258,51 @@ I also wouldn't be able to look the rest of [the Blue Noise Brigade](https://twi
 | [![white vs blue](white_vs_blue.png)](white_vs_blue.png) |
 | <center><i>notice how the noise at the bottom looks much smoother due to less "clumping"<br><a href="https://www.shadertoy.com/view/NdSyzz">shadertoy</a></i></center> |
 
-Quick note that you should then pipe the noise through this function to get the best results
-```hlsl
-float remap_pdf_tri_unity( float v ) {
-    v = v*2.0-1.0;
-    v = sign(v) * (1.0 - sqrt(1.0 - abs(v)));
+Quick note that you should then pipe the noise through a TPDF-remapping function to get the best results. Here is a slightly more reuse-friendly version of the final code, also supporting bluenoise (though still using the old hash-sampling function).
 
-    return v; //note: [-1;1[
+```hlsl
+//note: uniform pdf rand [0;1[
+float4 hash43n(float3 p)
+{
+    p  = frac(p * float3(5.3987, 5.4421, 6.9371));
+    p += dot(p.yzx, p.xyz  + float3(21.5351, 14.3137, 15.3247));
+    return frac(float4(p.x * p.y * 95.4307, p.x * p.y * 97.5901, p.x * p.z * 93.8369, p.y * p.z * 91.6931 ));
+}
+
+//note: input [0;1[, output [-1;1[
+//      source https://github.com/Unity-Technologies/Graphics/blob/master/com.unity.postprocessing/PostProcessing/Shaders/Builtins/Dithering.hlsl#L12
+float4 remap_pdf_tri_unity_v4( float4 v )
+{
+    v = v*2.0-1.0;
+    return sign(v) * (1.0 - sqrt(1.0 - abs(v))); //note: [-1;1[
+}
+
+//note: bluenoise-compatible dithering function, example usage (dithering rgb with 1/255 and alpha with 8/255):
+//      col.rgba += calc_dither( col.rgba, tex2D(bluenoise,uv), float4(1,1,1,8)/255.0 );
+float4 calc_dither( float4 col, float4 rnd01, float4 target_dither_amplitude_rcp255 )
+{
+    float4 rnd_rpdf = rnd01 - 0.5; //symmetric rpdf [-0.5;0.5[
+    float4 rnd_tpdf = remap_pdf_tri_unity_v4( rnd01 );
+    float4 rnd = (abs( col*(1.0/254.0) - (0.5/254.0) ) < 0.5/255.0 ) ? rnd_rpdf : rnd_tpdf;
+
+    float4 max_dither_amplitude = max( 1.0/255.0, min( col + (0.5/255.0), 255.5/255.0 - col ) );
+    rnd *= min( target_dither_amplitude_rcp255, max_dither_amplitude );
+
+    return rnd;
+}
+
+fixed4 SpriteFrag(v2f IN) : SV_Target
+{
+    float4 c = SampleSpriteTexture (IN.texcoord) * IN.color;
+    c.rgb *= c.a; //note: premultiplied alpha
+
+    float4 rnd01 = hash43n( float3(IN.texcoord, fmod(_Time.y, 1024.0)) ); // <-- could be a bluenoise-texture-sample instead
+    c += calc_dither( c.rgba, rnd01, float4(1,1,1,10)/255.0 );
+
+    return fixed4( c );
 }
 ```
+
 
 # References
 
