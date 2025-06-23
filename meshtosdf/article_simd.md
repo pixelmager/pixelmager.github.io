@@ -126,7 +126,7 @@ float32_t udTriangle_sq_precalc( vec3_t &p,  tri_precalc_t &pc )
              dot(pc.nor,p1)*dot(pc.nor,p1)*pc.rcp_dp2_nor );
 }
 ```
-This gets us down to **10610ms** including the precalc, which runs in 1.0/1.9 the runtime - or x1.9 "faster". Note that we are saving the position directly in the pre-calculated data, which is then accessed entirely linear, whereas before we were doing scattered reads of vertex-positions due to the indexed lookup into the mesh-positions. This improves the cache-performance, though we are reading more data from memory as there is no vertex-reuse. Of course, with the pre-calculated data, we are already reading a lot more data:
+This gets us down to **10610ms** including the precalc, which runs in x0.52 the runtime (or x1.9 "faster"). Note that we are saving the position directly in the pre-calculated data, which is then accessed entirely linear, whereas before we were doing scattered reads of vertex-positions due to the indexed lookup into the mesh-positions. This improves the cache-performance, though we are reading more data from memory as there is no vertex-reuse. Of course, with the pre-calculated data, we are already reading a lot more data:
 
 | tiger.obj, 2876tris, 64^3 | total size of precalculated data  | loaded memory per gridcell | notes |
 |:--------------------------|:----------------------------------|--------:|----------|
@@ -209,7 +209,7 @@ Some notes on the resulting code:
 * We also have to shuffle data around between actual calculations to use more than one SIMD-component for multiplications, and some parts still run only on single values and does involved stuff like horizontal sums.
 * We are now evaluating both sides of the conditional and doing a select between the two. This is done in order to use only SIMD-registers, as there is a significant performance-overhead to moving in and out of SIMD-registers. *TODO: link*
 
-This gets us down to **8265ms**, x1.3 faster compared to the non-SIMD precalculated version (x2.4 compared to bruteforce). It is faster, but not overly impressive.
+This gets us down to **8265ms**, x0.79 of the time compared to the non-SIMD precalculated version (x0.42 compared to bruteforce). It is faster, but not overly impressive.
 
 # Multiple Calculations in Parallel
 Instead of trying to fit the geometric-vector calculations into SIMD, we can "transpose" the problem, and simultaneously do 4 calculations in parallel. A nice illustration of the usefulness of this approach is to do 4 dot-products in parallel (see also this [excellent presentation](https://deplinenoise.files.wordpress.com/2015/03/gdc2015_afredriksson_simd.pdf))
@@ -297,7 +297,7 @@ __m128 dot4_fma( __m128 &a_x, __m128 &a_y, __m128 &a_z,
 }
 ```
 
-Now that we a clear idea of how to approach doing multiple calculations at a time, we need to decide between two options:
+Now that we have a clear idea of how to approach doing multiple calculations at a time, we need to decide between two options:
 - calculating the distance between 1 grid-cell and 4 triangles.
 - calculating the distance between 4 grid-cells and 1 triangle.
 
@@ -343,7 +343,7 @@ __m128 udTriangle_precalc_4tris( __m128 &p_x, __m128 &p_y, __m128 &p_z, tri_prec
 ```
 * Data is loaded and processing 4 triangles at a time, naturally aligned in memory (as long as the start of the data is aligned).
 
-This code runs in **3531ms**, x2.3 faster compared to the vector-simd version (x3.0 compared to the precomputed version).
+This code runs in **3531ms**, x0.43 faster compared to the vector-simd version (x0.33 compared to the precomputed version).
 
 As we are now parallelizing on triangles, we have to handle triangles not fitting in the 4\*N loop, to not miss any triangles. The simplest approach for this specific computation is to ignore the problem in the calculation, and pad the triangle-arrays with a "neutral" value, i.e. infinitely distant triangles... "neutral" values do not necessarily exist for all types of calculations, in which case the remaining values can be calculated serially (which is only a minor problem as there are necessarily few of them, less than the SIMD-size).
 
@@ -395,7 +395,7 @@ __m128 udTriangle_precalc_4grid( __m128 &p_x, __m128 &p_y, __m128 &p_z, tri_prec
 * The advantages are we have gotten entirely rid of the extra shuffles
 * ...and we are utilising all four SIMD-lanes at all times.
 
-This runs in **3125ms** - x1.1 the time of the 4tri_1gridcell version (x3.4 compared to precalc).
+This runs in **3125ms** - x0.9 of the time of the `4tri_1gridcell` version (x3.4 compared to precalc).
 
 Note that we only fetch triangle-data once per 4 gridcells rather than for each cell. The downside of this is all the SPLATs, copying of triangle-inputs to SIMD-lanes - now that we have precalculated a lot of data, that is a lot of splats. We can also only concurrently evaluate grids of size 4\*N, which we will address later on.
 
@@ -432,8 +432,8 @@ We can of course use `__m256` to run _8_ calculations in parallel where AVX2 is 
 | tiger.obj, 2876tris, 64^3 | method      | time(ms) | speedup |
 |---------------------------|:-----------:|---------:|------|
 |                           |  4grid_1tri (SSE)  |   3531ms | x1.0 (baseline) |
-|                           |  8grid_1tri (AVX2) |   1860ms | x1.9 |
-|                           | 16grid_1tri (AVX512) |    938ms | x3.7 |
+|                           |  8grid_1tri (AVX2) |   1860ms | x0.52 |
+|                           | 16grid_1tri (AVX512) |    938ms | x0.27 |
 |                           | 1grid_4tri (SSE) |   ms |  |
 |                           | 1grid_8tri (AVX2) |   ms |  |
 |                           | 1grid_16tri (AVX512) |  ms |  |
@@ -507,16 +507,16 @@ A word on memory-layout, each thread is writing linearly to a separate part of t
 | ![memwrite](memwrite.gif) |
 
 # Results Overview
-| tiger.obj, 2876tris, 64^3 |                                 | time(ms) | speedup |
+| tiger.obj, 2876tris, 64^3 |                                 | time(ms) | factor  |
 |:--------------------------|:--------------------------------|---------:|--------:|
-|                           | bruteforce                      |  20031ms |    x1.0 |
-|                           | precalc                         |  10610ms |    x1.9 |
-|                           | precalc_vector_simd             |   8265ms |    x2.4 |
-|                           | precalc_simd_4cells_1tri        |   3125ms |    x6.4 |
-|                           | precalc_simd_1cell_4tris        |   3531ms |    x5.6 |
-|                           | precalc_simd_16cells_1tri       |    938ms |   x21.4 |
-|                           | precalc_simd_16cells_1tri_mt36  |     62ms |  x323.1 |
-
+|                           | bruteforce                      |  20031ms | x1.0    |
+|                           | precalc                         |  10610ms | x0.53   |
+|                           | precalc_vector_simd             |   8265ms | x0.42   |
+|                           | precalc_simd_4cells_1tri        |   3125ms | x0.16   |
+|                           | precalc_simd_1cell_4tris        |   3531ms | x0.18   |
+|                           | precalc_simd_16cells_1tri       |    938ms | x0.05   |
+|                           | precalc_simd_16cells_1tri_mt36  |     62ms | x0.003  |
+ 
 *TODO: graph all teh things*
 
 # TODO: burst timings
